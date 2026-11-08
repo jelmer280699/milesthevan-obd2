@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="nl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>VEEPEAK Telefoontest</title>
+<style>
+:root{--bg:#0b0d10;--card:#151a20;--line:#252c35;--txt:#e8edf2;--dim:#8a96a3;--ok:#2ecc71;--warn:#ff9f1a;--bad:#ff3b30;--accent:#4aa3ff;color-scheme:dark}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--txt);font:16px/1.4 system-ui,sans-serif;
+ padding-block:16px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px))}
+h1{font-size:22px;margin:0 0 12px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px;margin-bottom:12px}
+.row{display:flex;justify-content:space-between;gap:12px;padding:4px 0;border-bottom:1px solid var(--line)}
+.row:last-child{border-bottom:0}
+.ok{color:var(--ok)}.bad{color:var(--bad)}.warn{color:var(--warn)}
+button{font-size:19px;padding:14px 20px;border-radius:12px;border:0;background:var(--accent);color:#000;font-weight:700;width:100%}
+button:disabled{opacity:.4}
+pre{white-space:pre-wrap;word-break:break-all;font:13px/1.4 ui-monospace,monospace;margin:0;max-height:50vh;overflow:auto}
+.big{font-size:40px;font-weight:700;font-variant-numeric:tabular-nums}
+</style>
+</head>
+<body>
+<h1>VEEPEAK telefoontest</h1>
+<div class="card" id="diag"></div>
+<div class="card">
+  <p style="margin-top:0">1. Koppel de VEEPEAK eerst in <b>Android-instellingen → Verbindingen → Bluetooth</b> (pincode meestal 1234 of 0000).<br>
+  2. Contact aan of motor aan.<br>3. Tik hieronder en kies de VEEPEAK.</p>
+  <button id="go">Verbinden en testen</button>
+</div>
+<div class="card"><div class="row"><span>Toerental</span><span class="big" id="rpm">–</span></div>
+  <div class="row"><span>Koelvloeistof</span><span class="big" id="cool">–</span></div></div>
+<div class="card"><pre id="log"></pre></div>
+<script>
+// Alleen-lezen test: uitsluitend AT-commando's en Mode 01/09-verzoeken.
+const $=s=>document.querySelector(s),log=t=>{$("#log").textContent+=t+"\n";$("#log").scrollTop=1e9};
+const ua=navigator.userAgent,cv=(ua.match(/Chrome\/(\d+)/)||[])[1];
+const D=[["Browser",ua.includes("SamsungBrowser")?"Samsung Internet (werkt niet, gebruik Chrome)":`Chrome ${cv||"?"}`,cv>=138&&!ua.includes("SamsungBrowser")],
+ ["Beveiligde verbinding (HTTPS)",isSecureContext?"ja":"nee",isSecureContext],
+ ["Web Serial beschikbaar","serial" in navigator?"ja":"nee","serial" in navigator]];
+$("#diag").innerHTML=D.map(([k,v,ok])=>`<div class="row"><span>${k}</span><b class="${ok?"ok":"bad"}">${v}</b></div>`).join("");
+if(!("serial" in navigator))$("#go").disabled=true;
+
+let port,reader,writer,buf="",pending=null;
+async function cmd(c,ms=6000){
+  buf="";await writer.write(new TextEncoder().encode(c+"\r"));
+  const end=Date.now()+ms;
+  while(Date.now()<end){
+    pending=pending||reader.read();  // één openstaand leesverzoek hergebruiken, zodat bij timeout geen data verloren gaat
+    const r=await Promise.race([pending,new Promise(res=>setTimeout(()=>res({timeout:true}),end-Date.now()))]);
+    if(r.timeout)break;
+    pending=null;
+    if(r.done)break;
+    buf+=new TextDecoder().decode(r.value);
+    if(buf.includes(">"))break;
+  }
+  const out=buf.replace(/>/g,"").replace(/\r+/g," | ").trim();
+  log(`${c.padEnd(6)} → ${out}`);return out;
+}
+$("#go").onclick=async()=>{
+  try{
+    port=await navigator.serial.requestPort({allowedBluetoothServiceClassIds:["00001101-0000-1000-8000-00805f9b34fb"]});
+    log("Poort gekozen, openen…");
+    await port.open({baudRate:38400});
+    writer=port.writable.getWriter();reader=port.readable.getReader();
+    log("Open. ELM327 initialiseren…");
+    for(const c of["ATZ","ATE0","ATL0","ATS1","ATH0","ATI","ATRV","ATSP6","0100","ATDP","0902"])await cmd(c,c==="ATZ"?4000:8000);
+    log("Live uitlezen (20 s)…");
+    const t0=Date.now();let n=0;
+    while(Date.now()-t0<20000){
+      const r=await cmd("010C05",3000);n++;
+      const b=r.split(/[\s|]+/).filter(x=>/^[0-9A-F]{2}$/.test(x)).map(x=>parseInt(x,16));
+      if(b[0]===0x41&&b[1]===0x0C&&b.length>=4)$("#rpm").textContent=Math.round((b[2]*256+b[3])/4);
+      if(b[0]===0x41&&b[4]===0x05&&b.length>=6)$("#cool").textContent=(b[5]-40)+" °C";
+    }
+    log(`KLAAR: ${n} metingen in 20 s (${(n/20).toFixed(1)} per seconde). Test geslaagd.`);
+  }catch(e){log("FOUT: "+e.name+": "+e.message)}
+  finally{try{reader&&reader.releaseLock();writer&&writer.releaseLock();port&&await port.close()}catch(e){}}
+};
+</script>
+</body>
+</html>
