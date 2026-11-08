@@ -26,7 +26,9 @@ pre{white-space:pre-wrap;word-break:break-all;font:13px/1.4 ui-monospace,monospa
 <div class="card">
   <p style="margin-top:0">1. Koppel de VEEPEAK eerst in <b>Android-instellingen → Verbindingen → Bluetooth</b> (pincode meestal 1234 of 0000).<br>
   2. Contact aan of motor aan.<br>3. Tik hieronder en kies de VEEPEAK.</p>
-  <button id="go">Verbinden en testen</button>
+  <button id="go">Verbinden en testen (variant A)</button>
+  <p class="dim" style="font-size:14px;color:var(--dim)">Lijst leeg? Probeer variant B:</p>
+  <button id="goB" style="background:var(--warn)">Verbinden en testen (variant B: filter op SPP)</button>
 </div>
 <div class="card"><div class="row"><span>Toerental</span><span class="big" id="rpm">–</span></div>
   <div class="row"><span>Koelvloeistof</span><span class="big" id="cool">–</span></div></div>
@@ -39,7 +41,10 @@ const D=[["Browser",ua.includes("SamsungBrowser")?"Samsung Internet (werkt niet,
  ["Beveiligde verbinding (HTTPS)",isSecureContext?"ja":"nee",isSecureContext],
  ["Web Serial beschikbaar","serial" in navigator?"ja":"nee","serial" in navigator]];
 $("#diag").innerHTML=D.map(([k,v,ok])=>`<div class="row"><span>${k}</span><b class="${ok?"ok":"bad"}">${v}</b></div>`).join("");
-if(!("serial" in navigator))$("#go").disabled=true;
+if(!("serial" in navigator)){$("#go").disabled=true;$("#goB").disabled=true}
+else navigator.serial.getPorts().then(p=>log(`Eerder toegestane poorten: ${p.length}`)).catch(e=>log("getPorts fout: "+e.message));
+log(`Versie testpagina: 2 · ${navigator.userAgent}`);
+const SPP="00001101-0000-1000-8000-00805f9b34fb";
 
 let port,reader,writer,buf="",pending=null;
 async function cmd(c,ms=6000){
@@ -57,10 +62,13 @@ async function cmd(c,ms=6000){
   const out=buf.replace(/>/g,"").replace(/\r+/g," | ").trim();
   log(`${c.padEnd(6)} → ${out}`);return out;
 }
-$("#go").onclick=async()=>{
+$("#go").onclick=()=>run({});
+$("#goB").onclick=()=>run({allowedBluetoothServiceClassIds:[SPP],filters:[{bluetoothServiceClassId:SPP}]});
+async function run(opts){
   try{
-    port=await navigator.serial.requestPort({allowedBluetoothServiceClassIds:["00001101-0000-1000-8000-00805f9b34fb"]});
-    log("Poort gekozen, openen…");
+    log(`requestPort(${JSON.stringify(opts)})`);
+    port=await navigator.serial.requestPort(opts);
+    log("Poort gekozen: "+JSON.stringify(port.getInfo())+" · openen…");
     await port.open({baudRate:38400});
     writer=port.writable.getWriter();reader=port.readable.getReader();
     log("Open. ELM327 initialiseren…");
@@ -76,7 +84,7 @@ $("#go").onclick=async()=>{
     log(`KLAAR: ${n} metingen in 20 s (${(n/20).toFixed(1)} per seconde). Test geslaagd.`);
   }catch(e){log("FOUT: "+e.name+": "+e.message)}
   finally{try{reader&&reader.releaseLock();writer&&writer.releaseLock();port&&await port.close()}catch(e){}}
-};
+}
 </script>
 </body>
 </html>
